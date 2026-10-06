@@ -1,0 +1,11 @@
+moveit_setup_assistant_config:
+  URDF:
+    package: mycobot_280m5_gripper_moveit_ready
+    relative_path: config/gazebo_firefighter.urdf
+    xacro_args: ""
+  SRDF:
+    relative_path: config/firefighter.srdf
+  CONFIG:
+    author_name: Stavros Avgerinos
+    author_email: saygerinos@gmail.com
+    generated_timestamp: 1747682921

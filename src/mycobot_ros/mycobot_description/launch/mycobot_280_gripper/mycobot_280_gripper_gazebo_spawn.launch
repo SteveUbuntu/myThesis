@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <include file="$(find mycobot_description)/launch/mycobot_280_gripper/mycobot_280_gripper_spawn_urdf.launch">
+        <arg name="x" value="0.0" />
+        <arg name="y" value="0.0" />
+        <arg name="z" value="0.03" />
+        <arg 
+        name="urdf_robot_file"
+        value="$(find mycobot_description)/urdf/mycobot_280_m5/mycobot_280_m5_gripper_gazebo_ready.urdf"
+        />
+        <arg name="robot_name" value="firefighter" />
+    </include>
+</launch>

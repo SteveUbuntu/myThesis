@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+
+import sys
+
+import rospy
+import moveit_commander
+import geometry_msgs.msg
+from sensor_msgs.msg import JointState
+from gazebo_ros_link_attacher.srv import Attach, AttachRequest
+
+
+def read_firefighter_joint_state():
+    rospy.loginfo('Waiting for /firefighter/joint_states...')
+    joint_state = rospy.wait_for_message('/firefighter/joint_states', JointState, timeout=10.0)
+    rospy.loginfo('Received joint state from /firefighter/joint_states: %s', joint_state.position)
+    return joint_state
+
+
+def set_start_state_from_joint_state(move_group, joint_state):
+    joint_names = move_group.get_joints()
+    if not joint_names:
+        rospy.logwarn('No joints found for arm_group; using current MoveIt state.')
+        move_group.set_start_state_to_current_state()
+        return
+
+    positions_by_name = dict(zip(joint_state.name, joint_state.position))
+    missing_joint_names = [name for name in joint_names if name not in positions_by_name]
+    if missing_joint_names:
+        rospy.logwarn('Joint state is missing arm joints %s; using current MoveIt state.', missing_joint_names)
+        move_group.set_start_state_to_current_state()
+        return
+
+    robot_state = move_group.get_current_state()
+    state_position_indices = {name: index for index, name in enumerate(robot_state.joint_state.name)}
+    missing_state_names = [name for name in joint_names if name not in state_position_indices]
+    if missing_state_names:
+        rospy.logwarn('MoveIt current state is missing arm joints %s; using current MoveIt state.', missing_state_names)
+        move_group.set_start_state_to_current_state()
+        return
+
+    state_positions = list(robot_state.joint_state.position)
+    for name in joint_names:
+        state_positions[state_position_indices[name]] = positions_by_name[name]
+    robot_state.joint_state.position = state_positions
+
+    move_group.set_start_state(robot_state)
+    rospy.loginfo('Set MoveIt start state from /firefighter/joint_states.')
+
+
+def main():
+    moveit_commander.roscpp_initialize(sys.argv)
+    rospy.init_node('move_group_interface_python', anonymous=True)
+
+    try:
+        joint_state = read_firefighter_joint_state()
+    except rospy.ROSException:
+        rospy.logwarn('No /firefighter/joint_states message received; using the current MoveIt state instead.')
+        joint_state = None
+
+    move_group = moveit_commander.MoveGroupCommander('arm_group')
+    move_group.set_pose_reference_frame('g_base')
+    move_group.set_planning_time(20.0)
+    move_group.allow_replanning(True)
+    move_group.set_goal_tolerance(0.01)
+
+    if joint_state is not None:
+        set_start_state_from_joint_state(move_group, joint_state)
+    else:
+        move_group.set_start_state_to_current_state()
+
+    target_pose = geometry_msgs.msg.Pose()
+    target_pose.position.x = 0.169999
+    target_pose.position.y = -0.050000
+    target_pose.position.z = 0.26213
+    target_pose.orientation.x = 0.707122
+    target_pose.orientation.y = -0.707065
+    target_pose.orientation.z = -0.000411
+    target_pose.orientation.w = 0.006100
+
+    rospy.loginfo('Target pose: x=%.6f y=%.6f z=%.6f',
+                  target_pose.position.x,
+                  target_pose.position.y,
+                  target_pose.position.z)
+
+    rospy.loginfo('Target orientation: x=%.6f y=%.6f z=%.6f w=%.6f',
+                  target_pose.orientation.x,
+                  target_pose.orientation.y,
+                  target_pose.orientation.z,
+                  target_pose.orientation.w)
+
+    move_group.set_pose_target(target_pose, end_effector_link='joint6_flange')
+
+    plan_result = move_group.plan()
+    if isinstance(plan_result, tuple):
+        success, plan, _, _ = plan_result
+    else:
+        success = True
+        plan = plan_result
+
+    if success and plan is not None:
+        execution_succeeded = move_group.execute(plan, wait=True)
+        if execution_succeeded:
+            rospy.loginfo('Motion execution completed.')
+        else:
+            rospy.logwarn('Motion execution reported failure; continuing with gripper close after execution ended.')
+
+        gripper_group = moveit_commander.MoveGroupCommander('gripper')
+        gripper_target = 'close'
+        gripper_group.set_named_target(gripper_target)
+        gripper_execution_succeeded = gripper_group.go(wait=True)
+        if gripper_execution_succeeded:
+            rospy.loginfo('Gripper motion to the %s state completed.', gripper_target)
+        else:
+            rospy.logwarn('Gripper motion reported failure; continuing after execution ended.')
+
+        try:
+            attach_service_name = '/link_attacher_node/attach'
+            rospy.wait_for_service(attach_service_name, timeout=10.0)
+            attach_service = rospy.ServiceProxy(attach_service_name, Attach)
+            attach_request = AttachRequest(
+                model_name_1='firefighter',
+                link_name_1='joint6_flange',
+                model_name_2='cube_clone',
+                link_name_2='link_1',
+            )
+            attach_response = attach_service(attach_request)
+            if attach_response.ok:
+                rospy.loginfo('Attached firefighter to cube_clone.')
+            else:
+                rospy.logerr('The link attacher service rejected the attachment.')
+        except (rospy.ROSException, rospy.ServiceException) as error:
+            rospy.logerr('Failed to attach links: %s', error)
+    else:
+        rospy.logerr('Motion planning failed!')
+
+    moveit_commander.roscpp_shutdown()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except rospy.ROSInterruptException:
+        pass

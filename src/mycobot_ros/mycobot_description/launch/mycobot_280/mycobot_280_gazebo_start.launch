@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+
+     <!-- Launch Gezabo world in paused-->
+    <include file = "$(find gazebo_ros)/launch/empty_world.launch" >
+        <arg name="use_sim_time" value="true"/>
+        <arg name="debug" value="false"/>
+        <arg name="gui" value="true"/>
+        <arg name="paused" value="true" />
+    </include> 
+    <include file="$(find mycobot_description)/launch/mycobot_280/mycobot_280_gazebo_spawn.launch"/>
+    <include file="$(find mycobot_description)/launch/mycobot_280/mycobot_280_gazebo_controllers.launch"/>
+
+</launch>

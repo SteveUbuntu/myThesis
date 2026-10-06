@@ -1,0 +1,82 @@
+tom:
+    # Publish all joint states -----------------------------------
+    joint_state_controller:
+      type: joint_state_controller/JointStateController
+      publish_rate: 50
+
+    # Position Controllers ---------------------------------------
+    head_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: head_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    left_eye_monitor_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: left_eye_monitor_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    right_eye_monitor_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: right_eye_monitor_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+  
+    # Position Controllers ---------------------------------------
+    left_arm_ball_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: left_arm_ball_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    left_arm_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: left_arm_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    right_arm_ball_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: right_arm_ball_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    right_arm_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: right_arm_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    left_forearm_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: left_forearm_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    right_forearm_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: right_forearm_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    left_knee_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: left_knee_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one
+
+    # Position Controllers ---------------------------------------
+    right_knee_joint_position_controller:
+      type: effort_controllers/JointPositionController
+      joint: right_knee_joint
+      pid: {p: 1.0, i: 1.0, d: 0.0}
+    # To add more just add them here as the first one

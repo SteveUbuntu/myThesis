@@ -1,0 +1,8 @@
+prefix=/home/stavros/catkin_ws/install
+
+Name: myarm_c650
+Description: Description of myarm_c650
+Version: 0.3.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: std_msgs actionlib

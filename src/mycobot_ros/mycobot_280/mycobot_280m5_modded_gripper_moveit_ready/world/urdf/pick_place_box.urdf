@@ -1,0 +1,26 @@
+<robot name="pp_box" >
+    <link name="box_pick_place" >
+        <inertial>
+            <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0"/>
+            <mass value="0.001"/>
+            <inertia ixx="4.166666666666667e-09" ixy="0.0" ixz="0.0" iyy="4.166666666666667e-09" iyz="0.0" izz="4.166666666666667e-09"/>
+        </inertial>
+        <visual>
+            <origin xyz = "0 0 0" />
+            <geometry>
+                <box size="0.005 0.005 0.005"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin xyz = "0 0 0" />
+            <geometry>
+                <box size="0.005 0.005 0.005"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <gazebo reference="box_pick_place" >
+        <material>Gazebo/Red</material>
+    </gazebo>
+
+</robot>

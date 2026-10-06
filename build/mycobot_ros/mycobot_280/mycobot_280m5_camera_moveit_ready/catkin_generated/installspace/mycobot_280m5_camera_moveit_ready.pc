@@ -1,0 +1,8 @@
+prefix=/home/stavros/catkin_ws/install
+
+Name: mycobot_280m5_camera_moveit_ready
+Description: Description of mycobot_280m5_camera_moveit_ready
+Version: 0.3.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

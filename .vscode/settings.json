@@ -1,0 +1,22 @@
+{
+    "cmake.sourceDirectory": "/home/stavros/catkin_ws/src/tom_description",
+    "C_Cpp.errorSquiggles": "enabled",
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:system",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
+    "python.autoComplete.extraPaths": [
+        "/home/stavros/catkin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/stavros/catkin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "files.exclude": {
+        "**/.git": false
+    }
+}
