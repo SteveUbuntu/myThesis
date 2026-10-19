@@ -153,7 +153,7 @@ def main():
     rospy.loginfo('Cartesian path completion: %.1f%%', fraction * 100.0)
 
     if fraction < 1.0:
-        rospy.logerr('Cartesian path is incomplete; refusing to execute it.')
+        rospy.logerr('Cartesian path is incomplete. Refusing to execute it.')
         return
 
     if len(plan.joint_trajectory.points) > 1:

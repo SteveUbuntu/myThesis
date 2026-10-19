@@ -23,7 +23,7 @@ JOINT_STEP = math.radians(5.0)
 GRIPPER_STATE_TOLERANCE = 0.005
 ROBOT_MODEL = 'firefighter'
 ROBOT_LINK = 'joint6_flange'
-OBJECT_MODEL = 'cube_clone'
+#OBJECT_MODEL = input("Enter the object model name:")
 OBJECT_LINK = 'link_1'
 
 KEY_BINDINGS = {
@@ -105,7 +105,7 @@ def move_cartesian_step(move_group, robot, compute_fk, axis, distance):
 	)
 	rospy.loginfo('Cartesian path completion: %.1f%%', fraction * 100.0)
 	if fraction < 1.0:
-		rospy.logwarn('Jog path is incomplete; not executing this key press.')
+		rospy.logwarn('Jog path is incomplete. Not executing this key press.')
 		return
 
 	if len(plan.joint_trajectory.points) > 1:
@@ -200,7 +200,7 @@ def toggle_gripper(gripper_group):
 		if name not in positions_by_name or name not in open_targets or name not in close_targets
 	]
 	if missing_joint_names:
-		rospy.logerr('Cannot determine gripper state; missing joint values for %s.', missing_joint_names)
+		rospy.logerr('Cannot determine gripper state. Missing joint values for %s.', missing_joint_names)
 		return
 
 	open_error = sum(
@@ -232,6 +232,13 @@ def toggle_gripper(gripper_group):
 def toggle_attachment(object_attached):
 	service_action = 'detach' if object_attached else 'attach'
 	service_name = '/link_attacher_node/%s' % service_action
+	select_cube = input("Select the cube to attach/detach (1.cube, 2.cube_clone, 3.ube_clone_0): ")
+	if select_cube == '1':
+		OBJECT_MODEL = 'cube_clone_0'
+	elif select_cube == '2':
+		OBJECT_MODEL = 'cube'
+	elif select_cube == '3':
+		OBJECT_MODEL = 'cube_clone'
 
 	try:
 		rospy.wait_for_service(service_name, timeout=5.0)
@@ -282,8 +289,8 @@ def main():
 	object_attached = False
 	try:
 		tty.setcbreak(file_descriptor)
-		print('Cartesian jog: W/S = Z +/-; A/D = X -/+; R/F = Y +/-')
-		print('Joint jog: press 1-6 to select a joint, then + or - (5 degrees); Q = quit')
+		print('Cartesian jog: W/S = Z +/-, A/D = X -/+, R/F = Y +/-')
+		print('Joint jog: press 1-6 to select a joint, then + or - (5 degrees). Q = quit')
 		print('Gripper: SPACE toggles between open and close')
 		print('Attachment: T toggles attach/detach')
 		while not rospy.is_shutdown():

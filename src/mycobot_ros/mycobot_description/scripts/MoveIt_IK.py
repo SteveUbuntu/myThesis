@@ -149,13 +149,13 @@ def main():
             )
             attach_response = attach_service(attach_request)
             if attach_response.ok:
-                rospy.loginfo('Attached firefighter to cube_clone.')
+                rospy.loginfo('Attached gripper to cube.')
             else:
                 rospy.logerr('The link attacher service rejected the attachment.')
         except (rospy.ROSException, rospy.ServiceException) as error:
             rospy.logerr('Failed to attach links: %s', error)
 
-        rospy.loginfo('Moving to the init_pose.')
+        rospy.loginfo('Moving to init_pose.')
         move_group.set_start_state_to_current_state()
         move_group.set_named_target('init_pose')
 
@@ -196,7 +196,7 @@ def main():
             if place_success and place_plan is not None:
                 place_execution_succeeded = move_group.execute(place_plan, wait=True)
                 if place_execution_succeeded:
-                    rospy.loginfo('Motion execution_2 completed.')
+                    rospy.loginfo('Motion_2 completed.')
                 else:
                     rospy.logwarn('place_motion reported failure.')
 
@@ -216,11 +216,11 @@ def main():
                 if place_offset_success and place_offset_plan is not None:
                     place_offset_execution_succeeded = move_group.execute(place_offset_plan, wait=True)
                     if place_offset_execution_succeeded:
-                        rospy.loginfo('Place offset motion completed.')
+                        rospy.loginfo('Place motion completed.')
                     else:
-                        rospy.logwarn('Place offset motion reported failure; continuing after execution ended.')
+                        rospy.logwarn('Place motion reported failure; continuing after execution ended.')
                 else:
-                    rospy.logerr('Place offset motion planning failed; continuing to detach.')
+                    rospy.logerr('Place motion planning failed; continuing to detach.')
 
                 gripper_target = 'open'
                 gripper_group.set_named_target(gripper_target)
@@ -243,7 +243,7 @@ def main():
                     )
                     detach_response = detach_service(detach_request)
                     if detach_response.ok:
-                        rospy.loginfo('Detached firefighter from cube_clone.')
+                        rospy.loginfo('Detached gripper from cube.')
                     else:
                         rospy.logerr('The link attacher service rejected the detachment.')
                 except (rospy.ROSException, rospy.ServiceException) as error:

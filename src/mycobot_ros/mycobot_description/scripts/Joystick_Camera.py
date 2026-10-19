@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+
+import copy
+import math
+import select
+import sys
+import termios
+import tty
+
+import moveit_commander
+import rospy
+from moveit_msgs.msg import MoveItErrorCodes
+from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest
+from sensor_msgs.msg import JointState
+
+
+REFERENCE_FRAME = 'g_base'
+END_EFFECTOR_LINK = 'camera_flange'
+STEP_SIZE = 0.01
+EEF_STEP = 0.01
+JOINT_STEP = math.radians(5.0)
+
+KEY_BINDINGS = {
+	'w': ('z', STEP_SIZE, 'Z+'),
+	's': ('z', -STEP_SIZE, 'Z-'),
+	'a': ('x', -STEP_SIZE, 'X-'),
+	'd': ('x', STEP_SIZE, 'X+'),
+	'r': ('y', STEP_SIZE, 'Y+'),
+	'f': ('y', -STEP_SIZE, 'Y-'),
+}
+
+
+def get_live_robot_state(robot, move_group, joint_state):
+	robot_state = robot.get_current_state()
+	positions_by_name = dict(zip(joint_state.name, joint_state.position))
+	state_position_indices = {
+		name: index for index, name in enumerate(robot_state.joint_state.name)
+	}
+	missing_joint_names = [
+		name for name in move_group.get_joints()
+		if name not in positions_by_name or name not in state_position_indices
+	]
+	if missing_joint_names:
+		rospy.logerr('Live joint state is missing arm joints: %s', missing_joint_names)
+		return None
+
+	state_positions = list(robot_state.joint_state.position)
+	for name in move_group.get_joints():
+		state_positions[state_position_indices[name]] = positions_by_name[name]
+	robot_state.joint_state.position = state_positions
+	return robot_state
+
+
+def get_current_pose(robot_state, compute_fk):
+	request = GetPositionFKRequest()
+	request.header.frame_id = REFERENCE_FRAME
+	request.fk_link_names = [END_EFFECTOR_LINK]
+	request.robot_state = robot_state
+	response = compute_fk(request)
+	if response.error_code.val != MoveItErrorCodes.SUCCESS:
+		rospy.logerr('Forward kinematics failed with MoveIt error code %d.', response.error_code.val)
+		return None
+	if not response.pose_stamped:
+		rospy.logerr('Forward kinematics returned no pose for %s.', END_EFFECTOR_LINK)
+		return None
+	return response.pose_stamped[0].pose
+
+
+def move_cartesian_step(move_group, robot, compute_fk, axis, distance):
+	try:
+		joint_state = rospy.wait_for_message('/firefighter/joint_states', JointState, timeout=5.0)
+	except rospy.ROSException as error:
+		rospy.logerr('Could not read live Gazebo joint state: %s', error)
+		return
+
+	robot_state = get_live_robot_state(robot, move_group, joint_state)
+	if robot_state is None:
+		return
+	current_pose = get_current_pose(robot_state, compute_fk)
+	if current_pose is None:
+		return
+
+	target_pose = copy.deepcopy(current_pose)
+	setattr(target_pose.position, axis, getattr(target_pose.position, axis) + distance)
+	move_group.set_start_state(robot_state)
+	waypoints = [copy.deepcopy(current_pose), copy.deepcopy(target_pose)]
+	plan, fraction = move_group.compute_cartesian_path(waypoints, EEF_STEP, avoid_collisions=True)
+	rospy.loginfo('Cartesian path completion: %.1f%%', fraction * 100.0)
+	if fraction < 1.0:
+		rospy.logwarn('Camera jog path is incomplete; not executing this key press.')
+		return
+
+	if len(plan.joint_trajectory.points) > 1:
+		plan.joint_trajectory.points = plan.joint_trajectory.points[1:]
+	timed_plan = move_group.retime_trajectory(robot_state, plan, 0.1, 0.1)
+	if not timed_plan.joint_trajectory.points:
+		rospy.logerr('Trajectory time parameterization failed; not executing the jog.')
+		return
+
+	execution_succeeded = move_group.execute(timed_plan, wait=True)
+	move_group.stop()
+	if execution_succeeded:
+		rospy.loginfo('Camera Cartesian jog completed.')
+	else:
+		rospy.logwarn('Controller reported failure for this Cartesian jog.')
+
+
+def move_joint_step(move_group, robot, joint_index, direction):
+	try:
+		joint_state = rospy.wait_for_message('/firefighter/joint_states', JointState, timeout=5.0)
+	except rospy.ROSException as error:
+		rospy.logerr('Could not read live Gazebo joint state: %s', error)
+		return
+
+	robot_state = get_live_robot_state(robot, move_group, joint_state)
+	if robot_state is None:
+		return
+	active_joint_names = move_group.get_active_joints()
+	if joint_index >= len(active_joint_names):
+		rospy.logerr('Arm group has only %d active joints.', len(active_joint_names))
+		return
+
+	positions_by_name = dict(zip(joint_state.name, joint_state.position))
+	target_joints = [positions_by_name[name] for name in active_joint_names]
+	joint_name = active_joint_names[joint_index]
+	target_joints[joint_index] += direction * JOINT_STEP
+	move_group.set_start_state(robot_state)
+	move_group.set_joint_value_target(target_joints)
+	plan_result = move_group.plan()
+	if isinstance(plan_result, tuple):
+		planning_succeeded, plan, _, _ = plan_result
+	else:
+		plan = plan_result
+		planning_succeeded = plan is not None and bool(plan.joint_trajectory.points)
+	if not planning_succeeded or plan is None or not plan.joint_trajectory.points:
+		rospy.logwarn('Planning failed for %s; joint was not moved.', joint_name)
+		return
+
+	timed_plan = move_group.retime_trajectory(robot_state, plan, 0.1, 0.1)
+	if not timed_plan.joint_trajectory.points:
+		rospy.logerr('Trajectory retiming failed for %s.', joint_name)
+		return
+
+	execution_succeeded = move_group.execute(timed_plan, wait=True)
+	move_group.stop()
+	if execution_succeeded:
+		rospy.loginfo('Joint %d (%s) moved by %.1f degrees.', joint_index + 1, joint_name, direction * 5.0)
+	else:
+		rospy.logwarn('Controller reported failure while moving joint %d (%s).', joint_index + 1, joint_name)
+
+
+def main():
+	moveit_commander.roscpp_initialize(sys.argv)
+	rospy.init_node('cartesian_keyboard_joystick_camera', anonymous=True)
+	move_group = moveit_commander.MoveGroupCommander('arm_group')
+	robot = moveit_commander.RobotCommander()
+	move_group.set_pose_reference_frame(REFERENCE_FRAME)
+	move_group.set_end_effector_link(END_EFFECTOR_LINK)
+	move_group.set_planning_time(20.0)
+	move_group.allow_replanning(True)
+	rospy.wait_for_service('/compute_fk')
+	compute_fk = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+
+	if not sys.stdin.isatty():
+		rospy.logerr('Keyboard control requires a terminal (TTY).')
+		return
+
+	file_descriptor = sys.stdin.fileno()
+	original_terminal_settings = termios.tcgetattr(file_descriptor)
+	active_joint_names = move_group.get_active_joints()
+	selected_joint = None
+	try:
+		tty.setcbreak(file_descriptor)
+		print('Camera Cartesian jog: W/S = Z +/-; A/D = X -/+; R/F = Y +/-')
+		print('Joint jog: press 1-6 to select a joint, then + or - (5 degrees); Q = quit')
+		while not rospy.is_shutdown():
+			readable, _, _ = select.select([sys.stdin], [], [], 0.1)
+			if not readable:
+				continue
+
+			key = sys.stdin.read(1).lower()
+			if key == 'q':
+				break
+			if key in '123456':
+				selected_joint = int(key) - 1
+				if selected_joint < len(active_joint_names):
+					rospy.loginfo('Selected joint %d: %s.', selected_joint + 1, active_joint_names[selected_joint])
+				else:
+					rospy.logerr('Arm group has only %d active joints.', len(active_joint_names))
+					selected_joint = None
+				continue
+			if key in ('+', '=', '-'):
+				if selected_joint is None:
+					rospy.logwarn('Select a joint with a number from 1 to 6 first.')
+					continue
+				move_joint_step(move_group, robot, selected_joint, 1 if key in ('+', '=') else -1)
+				termios.tcflush(file_descriptor, termios.TCIFLUSH)
+				continue
+			if key not in KEY_BINDINGS:
+				continue
+
+			axis, distance, direction = KEY_BINDINGS[key]
+			rospy.loginfo('Jogging camera link %s by %.3f m.', direction, abs(distance))
+			move_cartesian_step(move_group, robot, compute_fk, axis, distance)
+			termios.tcflush(file_descriptor, termios.TCIFLUSH)
+	finally:
+		termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_terminal_settings)
+		move_group.stop()
+		moveit_commander.roscpp_shutdown()
+
+
+if __name__ == '__main__':
+	main()
