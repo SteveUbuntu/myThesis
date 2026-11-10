@@ -6,6 +6,7 @@ import rospy
 import moveit_commander
 import geometry_msgs.msg
 from sensor_msgs.msg import JointState
+from tf2_msgs.msg import TFMessage
 from gazebo_ros_link_attacher.srv import Attach, AttachRequest
 
 
@@ -61,7 +62,8 @@ def main():
     move_group.set_pose_reference_frame('g_base')
     move_group.set_planning_time(20.0)
     move_group.allow_replanning(True)
-    move_group.set_goal_tolerance(0.01)
+    move_group.set_goal_tolerance(0.0001)
+    move_group.set_max_acceleration_scaling_factor(0.3)
 
     if joint_state is not None:
         set_start_state_from_joint_state(move_group, joint_state)
@@ -104,8 +106,8 @@ def main():
             rospy.loginfo('Motion execution completed.')
         else:
             rospy.logwarn('Motion execution reported failure; continuing with gripper close after execution ended.')
-        
-        pick_pose.position.z = 0.23213
+
+        pick_pose.position.z = 0.22900
 
         rospy.loginfo('Moving closer to execute Pick Action.')
         move_group.set_start_state_to_current_state()
@@ -158,6 +160,7 @@ def main():
         rospy.loginfo('Moving to init_pose.')
         move_group.set_start_state_to_current_state()
         move_group.set_named_target('init_pose')
+        move_group.set_goal_tolerance(0.01)
 
         init_plan_result = move_group.plan()
         if isinstance(init_plan_result, tuple):
@@ -248,6 +251,8 @@ def main():
                         rospy.logerr('The link attacher service rejected the detachment.')
                 except (rospy.ROSException, rospy.ServiceException) as error:
                     rospy.logerr('Failed to detach links: %s', error)
+
+                place_pose.position.z = 0.17713
 
                 rospy.loginfo('Returning to the init_pose.')
                 move_group.set_start_state_to_current_state()
