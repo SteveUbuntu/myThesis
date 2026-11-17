@@ -1,178 +1,309 @@
 #!/usr/bin/env python3
+import itertools
 import numpy as np
 
-#Links in meters
+# -----------------------------------------------------------------------------
+# Robot geometry constants from the actual URDF chain.
+# -----------------------------------------------------------------------------
+# Links in meters
 d1 = 131.56e-3
 d4 = 64.62e-3
 d5 = 73.18e-3
-d6 = 48.6e-3
+d6 = 45.6e-3
 r2 = 110.4e-3
 r3 = 96.0e-3
 
-#Solution usage. Positive or Negative
-elbow_branch = 1.0
-wrist_branch = 1.0
-
-#Desired end-effector position and orientation
-A06 = np.array([[0.0, 0.0, 1.0, 0.0456],
-                [-1.0, 0.0, 0.0, -0.0646],
-                [0.0, -1.0, 0.0, 0.4111],
-                [0.0, 0.0, 0.0, 1.0]])
-
-#Desired Orientation
-X_x = A06[0, 0]
-X_y = A06[1, 0]
-X_z = A06[2, 0]
-
-Y_x = A06[0, 1]
-Y_y = A06[1, 1]
-Y_z = A06[2, 1]
-
-Z_x = A06[0, 2]
-Z_y = A06[1, 2]
-Z_z = A06[2, 2]
-
-#Desired Position
-Px = A06[0, 3]
-Py = A06[1, 3]
-Pz = A06[2, 3]
+# Desired end-effector pose, expressed as g_base -> joint6_flange.
+A06_target = np.array([[0.0, -1.0, 0.0, 0.169999],
+                       [-1.0, 0.0, 0.0, -0.050000],
+                       [0.0, 0.0, -1.0, 0.220000],
+                       [0.0, 0.0, 0.0, 1.0]])
 
 
-def compute_theta1(Px, Py, Pz, Z_x, Z_y, Z_z, d4, d6, elbow_branch):
+def urdf_joint_transform(xyz, rpy, theta):
+    """Return a URDF joint transform: origin pose followed by rotation about local z."""
+    roll, pitch, yaw = rpy
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
 
-    P05x = Px - Z_x * d6
-    P05y = Py - Z_y * d6
-    P05z = Pz - Z_z * d6
+    rotation = np.array([
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ], dtype=float)
 
-    alpha1 = np.arctan2(P05y, P05x)
-    P05xy = np.hypot(P05x, P05y)
+    origin = np.eye(4)
+    origin[:3, :3] = rotation
+    origin[:3, 3] = xyz
 
+    c, s = np.cos(theta), np.sin(theta)
+    joint_motion = np.array([
+        [c, -s, 0.0, 0.0],
+        [s, c, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ], dtype=float)
+    return origin @ joint_motion
+
+
+def compute_fk_from_joint_angles(q):
+    """Compute g_base -> joint6_flange FK using the URDF joint origins."""
+    q = np.asarray(q, dtype=float)
+    if q.shape != (6,):
+        raise ValueError("Expected 6 joint angles in radians.")
+
+    q1, q2, q3, q4, q5, q6 = q
+
+    # Frame 0 is g_base/joint1; frame 6 is joint6_flange.
+    # The origin values and RPY rotations below are copied from the URDF joint chain.
+    A01 = urdf_joint_transform([0.0, 0.0, d1], [0.0, 0.0, 0.0], q1)
+    A12 = urdf_joint_transform([0.0, 0.0, 0.0], [0.0, 1.5708, -1.5708], q2)
+    A23 = urdf_joint_transform([-r2, 0.0, 0.0], [0.0, 0.0, 0.0], q3)
+    A34 = urdf_joint_transform([-r3, 0.0, d4], [0.0, 0.0, -1.5708], q4)
+    A45 = urdf_joint_transform([0.0, -d5, 0.0], [1.5708, -1.5708, 0.0], q5)
+    A56 = urdf_joint_transform([0.0, d6, 0.0], [-1.5708, 0.0, 0.0], q6)
+
+    A06 = A01 @ A12 @ A23 @ A34 @ A45 @ A56
+
+    return {
+        "A01": A01,
+        "A12": A12,
+        "A23": A23,
+        "A34": A34,
+        "A45": A45,
+        "A56": A56,
+        "A06": A06,
+    }
+
+
+DH_HALF_PI = 1.5708
+DH_ALPHA = (0.0, DH_HALF_PI, 0.0, 0.0, DH_HALF_PI, -DH_HALF_PI)
+DH_A = (0.0, 0.0, -r2, -r3, 0.0, 0.0)
+DH_D = (d1, 0.0, 0.0, d4, d5, d6)
+# q_URDF = theta_PDF + offset; the nonzero offsets come from the URDF joint origins.
+PDF_TO_URDF_ANGLE_OFFSET = np.array([
+    0.0,
+    DH_HALF_PI,
+    0.0,
+    DH_HALF_PI,
+    -DH_HALF_PI,
+    0.0,
+])
+# Allows small geometric overshoots from rounded URDF right-angle rotations.
+TRIG_DOMAIN_TOLERANCE = 1e-3
+FK_POSITION_TOLERANCE = 1e-4
+FK_ORIENTATION_TOLERANCE = 1e-3
+JOINT_LIMITS = np.array([
+    [-2.9322, 2.9322],
+    [-2.3562, 2.3562],
+    [-2.6180, 2.6180],
+    [-2.5307, 2.5307],
+    [-2.8798, 2.8798],
+    [-3.1400, 3.14159],
+])
+
+
+def pdf_dh_transform(alpha_i, a_i, d_i, theta_i):
+    """Return one transform using the modified-DH convention in the PDF."""
+    c, s = np.cos(theta_i), np.sin(theta_i)
+    ca, sa = np.cos(alpha_i), np.sin(alpha_i)
+    return np.array([
+        [c, -s, 0.0, a_i],
+        [s * ca, c * ca, -sa, -sa * d_i],
+        [s * sa, c * sa, ca, ca * d_i],
+        [0.0, 0.0, 0.0, 1.0],
+    ], dtype=float)
+
+
+def pdf_fk_from_theta(theta):
+    """Compute the PDF-frame transforms for its six modified-DH joints."""
+    transforms = [
+        pdf_dh_transform(alpha_i, a_i, d_i, theta_i)
+        for alpha_i, a_i, d_i, theta_i in zip(DH_ALPHA, DH_A, DH_D, theta)
+    ]
+    A01, A12, A23, A34, A45, A56 = transforms
+    return {
+        "A01": A01,
+        "A12": A12,
+        "A23": A23,
+        "A34": A34,
+        "A45": A45,
+        "A56": A56,
+        "A06": A01 @ A12 @ A23 @ A34 @ A45 @ A56,
+    }
+
+
+def checked_acos(value, description):
+    if value < -1.0 - TRIG_DOMAIN_TOLERANCE or value > 1.0 + TRIG_DOMAIN_TOLERANCE:
+        raise ValueError(
+            "Target pose is unreachable: arccos input for {} is outside [-1, 1].".format(
+                description
+            )
+        )
+    return np.arccos(np.clip(value, -1.0, 1.0))
+
+
+def checked_asin(value, description):
+    if value < -1.0 - TRIG_DOMAIN_TOLERANCE or value > 1.0 + TRIG_DOMAIN_TOLERANCE:
+        raise ValueError(
+            "Target pose is unreachable: arcsin input for {} is outside [-1, 1].".format(
+                description
+            )
+        )
+    return np.arcsin(np.clip(value, -1.0, 1.0))
+
+
+def compute_pose_errors(target, actual):
+    position_error = np.linalg.norm(actual[:3, 3] - target[:3, 3])
+    relative_rotation = target[:3, :3].T @ actual[:3, :3]
+    orientation_error = np.arccos(np.clip(
+        (np.trace(relative_rotation) - 1.0) / 2.0,
+        -1.0,
+        1.0,
+    ))
+    return position_error, orientation_error
+
+
+def normalize_joint_angles_to_limits(q):
+    """Choose equivalent revolute angles within the URDF joint limits."""
+    normalized = []
+    for angle, (lower, upper) in zip(q, JOINT_LIMITS):
+        valid = [
+            angle + 2.0 * np.pi * turns
+            for turns in range(-2, 3)
+            if lower <= angle + 2.0 * np.pi * turns <= upper
+        ]
+        if not valid:
+            return None
+        normalized.append(min(valid, key=lambda value: abs(value - angle)))
+    return np.asarray(normalized)
+
+
+def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
+    """Apply the PDF's analytic IK in its DH frames, then map angles to URDF joints."""
+    target = np.asarray(A06, dtype=float)
+    if target.shape != (4, 4):
+        raise ValueError("Expected a 4x4 target transform.")
+    if any(branch not in (-1.0, 1.0) for branch in
+           (shoulder_branch, elbow_branch, wrist_branch)):
+        raise ValueError("IK branch values must each be either -1 or +1.")
+
+    Px, Py = target[:2, 3]
+    P05 = target[:3, 3] - d6 * target[:3, 2]
+    P05xy = np.hypot(P05[0], P05[1])
     if P05xy < 1e-12:
-        raise ValueError("P05xy is too small. wrist-center projection is singular.")
+        raise ValueError("Wrist-center projection is singular.")
 
-    alpha2 = np.arccos(np.clip(d4 / P05xy, -1.0, 1.0))
-    theta1 = alpha1 + elbow_branch * alpha2 + np.pi / 2.0
+    theta1 = (
+        np.arctan2(P05[1], P05[0])
+        + shoulder_branch * checked_acos(d4 / P05xy, "shoulder angle")
+        + np.pi / 2.0
+    )
 
-    return theta1
-
-def compute_theta2(P14x, P14y, P14z, r3, theta3):
-
-    P14xz = np.hypot(P14x, P14z)
-
-    if P14xz < 1e-12:
-        raise ValueError("P14xz is too small. theta2 is singular.")
-
-    phi1 = np.arctan2(P14y, -P14x)
-    phi2 = np.arcsin((r3*np.sin(theta3))/P14xz)
-
-    theta2 = np.pi / 2.0 + (phi1 - phi2)
-    return theta2
-
-
-def compute_theta3(P14xy,r2, r3, elbow_branch):
-
-
-    c3 = (P14xy - r2**2 - r3**2) / (2 * r2 * r3)
-    c3 = np.clip(c3, -1.0, 1.0)
-
-    theta3 = elbow_branch * np.arccos(c3)
-    return theta3
-
-
-def compute_theta4(theta3):
-
-    s3 = np.sin(theta3)
-    c3 = np.cos(theta3)
-
-    theta4 = np.arctan2(s3, c3)
-
-    return theta4
-
-
-def compute_theta5(Px, Py, theta1, d4, d6, wrist_branch):
-
-    c1 = np.cos(theta1)
-    s1 = np.sin(theta1)
-    c5 = (Px * s1 - Py * c1 - d4) / d6
-    c5 = np.clip(c5, -1.0, 1.0)
-
-    theta5 = wrist_branch * np.arccos(c5)
-    return theta5
-
-
-def compute_theta6(X_x, X_y, Y_x, Y_y, theta5, theta1):
-
-    s1 = np.sin(theta1)
-    c1 = np.cos(theta1)
+    c5 = (Px * np.sin(theta1) - Py * np.cos(theta1) - d4) / d6
+    theta5 = wrist_branch * checked_acos(c5, "wrist angle")
     s5 = np.sin(theta5)
-
     if abs(s5) < 1e-12:
-        raise ValueError("s5 is too small. theta6 is singular.")
+        raise ValueError("Wrist is singular: theta6 is not determined by the target pose.")
 
-    c6 = (X_x * s1 - X_y * c1) / s5
-    s6 = (Y_y * c1 - Y_x * s1) / s5
-    theta6 = np.arctan2(s6, c6)
+    inverse_rotation = target[:3, :3].T
+    x6 = (
+        inverse_rotation[0, 0] * np.sin(theta1)
+        - inverse_rotation[0, 1] * np.cos(theta1)
+    ) / s5
+    y6 = (
+        -inverse_rotation[1, 0] * np.sin(theta1)
+        + inverse_rotation[1, 1] * np.cos(theta1)
+    ) / s5
+    theta6 = np.arctan2(y6, x6)
 
-    return theta6
+    A01 = pdf_dh_transform(DH_ALPHA[0], DH_A[0], DH_D[0], theta1)
+    A12 = pdf_dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], 0.0)
+    A23 = pdf_dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], 0.0)
+    A45 = pdf_dh_transform(DH_ALPHA[4], DH_A[4], DH_D[4], theta5)
+    A56 = pdf_dh_transform(DH_ALPHA[5], DH_A[5], DH_D[5], theta6)
+    A46 = A45 @ A56
+
+    A14 = np.linalg.inv(A01) @ target @ np.linalg.inv(A46)
+    P14 = A14[:3, 3]
+    P14xz = np.hypot(P14[0], P14[2])
+    if P14xz < 1e-12:
+        raise ValueError("Elbow geometry is singular.")
+
+    c3 = (P14xz**2 - r2**2 - r3**2) / (2.0 * r2 * r3)
+    theta3 = elbow_branch * checked_acos(c3, "elbow angle")
+
+    theta2 = (
+        np.arctan2(-P14[2], -P14[0])
+        - checked_asin(r3 * np.sin(theta3) / P14xz, "shoulder angle")
+    )
+
+    A03 = (
+        A01
+        @ pdf_dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], theta2)
+        @ pdf_dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], theta3)
+    )
+    A34 = np.linalg.inv(A03) @ target @ np.linalg.inv(A46)
+    theta4 = np.arctan2(A34[1, 0], A34[0, 0])
+
+    theta = np.array([theta1, theta2, theta3, theta4, theta5, theta6])
+    q = theta + PDF_TO_URDF_ANGLE_OFFSET
+    actual = compute_fk_from_joint_angles(q)["A06"]
+    position_error, orientation_error = compute_pose_errors(target, actual)
+    if (position_error > FK_POSITION_TOLERANCE
+            or orientation_error > FK_ORIENTATION_TOLERANCE):
+        raise ValueError(
+            "IK candidate failed FK validation: position error {:.6g} m, "
+            "orientation error {:.6g} rad.".format(
+                position_error,
+                orientation_error,
+            )
+        )
+    return q
 
 
 def main():
+    # Forward kinematics at the MoveIt init_pose (all six arm joints are zero).
+    q_home = np.zeros(6, dtype=float)
+    fk_home = compute_fk_from_joint_angles(q_home)
 
-    # 1) theta1
-    theta1 = compute_theta1(Px, Py, Pz, Z_x, Z_y, Z_z, d4, d6, elbow_branch)
+    print("FK g_base -> joint6_flange at init_pose:")
+    print("\nA06_fk =\n", np.round(fk_home['A06'], 6))
 
-    # 2) theta5
-    theta5 = compute_theta5(Px, Py, theta1, d4, d6, wrist_branch)
+    print("\nTarget pose:", A06_target)
+    print("\nValid IK solutions (within URDF joint limits):")
+    solution_count = 0
+    for shoulder, elbow, wrist in itertools.product((-1.0, 1.0), repeat=3):
+        branches = (shoulder, elbow, wrist)
+        try:
+            q = compute_ik_solution(A06_target, *branches)
+        except ValueError as error:
+            print("Branches {}: unavailable ({})".format(branches, error))
+            continue
 
-    # 3) theta6
-    theta6 = compute_theta6(X_x, X_y, Y_x, Y_y, theta5, theta1)
+        q = normalize_joint_angles_to_limits(q)
+        if q is None:
+            print("Branches {}: outside URDF joint limits".format(branches))
+            continue
 
-    A01 = np.array([[np.cos(theta1), np.sin(theta1), 0, 0],
-                     [np.sin(theta1), -np.cos(theta1), 0, 0],
-                     [0, 0, 1, d1],
-                     [0, 0, 0, 1]])
+        fk_solution = compute_fk_from_joint_angles(q)["A06"]
+        position_error, rotation_error = compute_pose_errors(A06_target, fk_solution)
+        solution_count += 1
+        print("\nSolution {} — shoulder {}, elbow {}, wrist {}".format(
+            solution_count,
+            "+" if shoulder > 0 else "-",
+            "+" if elbow > 0 else "-",
+            "+" if wrist > 0 else "-",
+        ))
+        for index, value in enumerate(np.degrees(q), start=1):
+            print("q{} = {:.6f} deg".format(index, value))
+        print("FK position error (m) = {:.9g}".format(position_error))
+        print("FK orientation error (rad) = {:.9g}".format(rotation_error))
 
-    A45 = np.array([[np.cos(theta5), 0, -np.sin(theta5), 0],
-                    [np.sin(theta5), 0, np.cos(theta5), 0],
-                    [0, -1, 0, d5],
-                    [0, 0, 0, 1]])
+    if solution_count == 0:
+        print("No IK solutions satisfy the target pose and URDF joint limits.")
 
-    A56 = np.array([[np.cos(theta6), -np.sin(theta6), 0, 0],
-                    [np.sin(theta6), np.cos(theta6), 0, 0],
-                    [0, 0, 1, d6],
-                    [0, 0, 0, 1]])
-
-    A14 = np.linalg.inv(A01) @ A06 @ np.linalg.inv(A56) @ np.linalg.inv(A45)
-
-    P14x, P14y, P14z = A14[:3, 3]
-    P14xy = np.hypot(P14y, P14x)
-
-    # 4) theta3
-    theta3 = compute_theta3(P14xy, r2, r3, elbow_branch)
-
-    # 5) theta2
-    theta2 = compute_theta2(P14x, P14y, P14z, r3, theta3)
-
-    # 6) theta4
-    theta4 = compute_theta4(theta3)
-
-    q1 = np.degrees(theta1)
-    q2_rad = theta2 + np.pi / 2.0
-    q3 = np.degrees(theta3)
-    q4_rad = theta4 + np.pi / 2.0
-    q5_rad = theta5 + np.pi / 2.0
-    q6 = np.degrees(theta6)
-
-    q2 = np.degrees(q2_rad)
-    q4 = np.degrees(q4_rad)
-    q5 = np.degrees(q5_rad)
-
-    print("q1 =", q1)
-    print("q2 =", q2)
-    print("q3 =", q3)
-    print("q4 =", q4)
-    print("q5 =", q5)
-    print("q6 =", q6)
 
 if __name__ == "__main__":
     main()

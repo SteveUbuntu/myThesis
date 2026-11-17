@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+import numpy as np
+
+#Links in meters
+d1 = 131.56e-3
+d4 = 64.62e-3
+d5 = 73.18e-3
+d6 = 45.6e-3
+r2 = 110.4e-3
+r3 = 96.0e-3
+
+#Solution usage. Positive or Negative
+shoulder_branch = 1.0
+elbow_branch = 1.0
+wrist_branch = 1.0
+
+#Desired end-effector position and orientation
+A06 = np.array([[0.0, -1.0, 0.0, 0.000274444],
+                [-1.0, 0.0, 0.0, -0.064253],
+                [0.0, 0.0, -1.0, 0.266252],
+                [0.0, 0.0, 0.0, 1.0]])
+
+#Desired Orientation
+X_x = A06[0, 0]
+X_y = A06[1, 0]
+X_z = A06[2, 0]
+
+Y_x = A06[0, 1]
+Y_y = A06[1, 1]
+Y_z = A06[2, 1]
+
+Z_x = A06[0, 2]
+Z_y = A06[1, 2]
+Z_z = A06[2, 2]
+
+#Desired Position
+Px = A06[0, 3]
+Py = A06[1, 3]
+Pz = A06[2, 3]
+
+#Wrist Center Position P05
+d6_translation = np.array([[0.0], [0.0], [-d6], [1.0]])
+#P06 = A06[:,3]
+P06 = np.array([[Px], [Py], [Pz]])
+#Z06 = A06[:,2]
+Z06 = np.array([[Z_x], [Z_y], [Z_z]])
+P05 = P06 - d6 * Z06
+
+P05x = P05[0, 0]
+P05y = P05[1, 0]
+P05z = P05[2, 0]
+
+def compute_theta1(P05x, P05y, d4, shoulder_branch):
+
+    alpha1 = np.arctan2(P05y, P05x)
+    P05xy = np.hypot(P05x, P05y)
+
+    if P05xy < 1e-12:
+        raise ValueError("P05xy is too small. wrist-center projection is singular.")
+
+    alpha2 = np.arccos(np.clip(d4 / P05xy, -1.0, 1.0))
+    theta1 = alpha1 + shoulder_branch * alpha2 + np.pi / 2.0
+
+    return theta1
+
+def compute_theta2(P14xz, P14x, P14z, r3, theta3):
+
+    if P14xz < 1e-12:
+        raise ValueError("P14xz is too small. theta2 is singular.")
+
+    phi1 = np.arctan2(-P14z, -P14x)
+    phi2 = np.arcsin((-r3*np.sin(theta3))/P14xz)
+
+    theta2 = phi1 - phi2
+
+    return theta2
+
+
+def compute_theta3(P14xz, r2, r3, elbow_branch):
+
+    c3 = (P14xz**2 - r2**2 - r3**2) / (2 * r2 * r3)
+    c3 = np.clip(c3, -1.0, 1.0)
+
+    theta3 = elbow_branch * np.arccos(c3)
+
+    return theta3
+
+
+def compute_theta4(theta3):
+
+
+    s3 = np.sin(theta3)
+    c3 = np.cos(theta3)
+
+    theta4 = np.arctan2(s3, c3)
+
+    return theta4
+
+
+def compute_theta5(Px, Py, theta1, d4, d6, wrist_branch):
+
+    c1 = np.cos(theta1)
+    s1 = np.sin(theta1)
+    #c5 = (Px * s1 - Py * c1 - d4) / d6
+    #c5 = np.clip(c5, -1.0, 1.0)
+
+    theta5 = wrist_branch * np.arccos((Px * s1 - Py * c1 - d4) / d6)
+    return theta5
+
+
+def compute_theta6(A06, theta1, theta5):
+
+    s1 = np.sin(theta1)
+    c1 = np.cos(theta1)
+    s5 = np.sin(theta5)
+
+    inverseA06 = np.linalg.inv(A06)
+    inverseX_x = inverseA06[0, 0]
+    inverseX_y = inverseA06[1, 0]
+    inverseY_x = inverseA06[0, 1]
+    inverseY_y = inverseA06[1, 1]
+
+    if abs(s5) < 1e-12:
+        raise ValueError("s5 is too small. theta6 is singular.")
+
+    y_component = (-inverseX_y * s1 + inverseY_y * c1) / s5
+    x_component = (inverseX_x * s1 - inverseY_x * c1) / s5
+    theta6 = np.arctan2(y_component, x_component)
+
+    return theta6
+
+
+def main():
+
+    # 1) theta1
+    theta1 = compute_theta1(P05x, P05y, d4, shoulder_branch)
+
+    # 2) theta5
+    theta5 = compute_theta5(Px, Py, theta1, d4, d6, wrist_branch)
+
+    # 3) theta6
+    theta6 = compute_theta6(A06, theta1, theta5)
+
+    A01 = np.array([[np.cos(theta1), -np.sin(theta1), 0, 0],
+                     [np.sin(theta1), np.cos(theta1), 0, 0],
+                     [0, 0, 1, d1],
+                     [0, 0, 0, 1]])
+
+    A45 = np.array([[np.cos(theta5), -np.sin(theta5), 0, 0],
+                    [0, 0, -1, -d5],
+                    [np.sin(theta5), np.cos(theta5), 0, 0],
+                    [0, 0, 0, 1]])
+
+    A56 = np.array([[np.cos(theta6), -np.sin(theta6), 0, 0],
+                    [0, 0, 1, d6],
+                    [-np.sin(theta6), -np.cos(theta6), 0, 0],
+                    [0, 0, 0, 1]])
+
+    A46 = A45 @ A56
+
+    A14 = np.linalg.inv(A01) @ A06 @ np.linalg.inv(A46)
+    X14x = A14[0, 1]
+    X14y = A14[1, 1]
+    P14 = A14[:, 3]
+
+    P14x = P14[0]
+    P14y = P14[1]
+    P14z = P14[2]
+
+    P14xz = np.hypot(P14x, P14z)
+
+    # 4) theta3
+    theta3 = compute_theta3(P14xz, r2, r3, elbow_branch)
+
+    # 5) theta2
+    theta2 = compute_theta2(P14xz, P14x, P14z, r3, theta3)
+
+    # 6) theta4
+    theta4 = compute_theta4(theta3)
+
+    q1 = np.degrees(theta1)
+    q2 = np.degrees(theta2)
+    q3 = np.degrees(theta3)
+    q4 = np.degrees(theta4)
+    q5 = np.degrees(theta5)
+    q6 = np.degrees(theta6)
+
+    print("q1 =", q1)
+    print("q2 =", q2)
+    print("q3 =", q3)
+    print("q4 =", q4)
+    print("q5 =", q5)
+    print("q6 =", q6)
+
+if __name__ == "__main__":
+    main()
