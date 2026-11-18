@@ -81,8 +81,8 @@ DH_HALF_PI = 1.5708
 DH_ALPHA = (0.0, DH_HALF_PI, 0.0, 0.0, DH_HALF_PI, -DH_HALF_PI)
 DH_A = (0.0, 0.0, -r2, -r3, 0.0, 0.0)
 DH_D = (d1, 0.0, 0.0, d4, d5, d6)
-# q_URDF = theta_PDF + offset; the nonzero offsets come from the URDF joint origins.
-PDF_TO_URDF_ANGLE_OFFSET = np.array([
+# q_URDF = theta + offset; the nonzero offsets come from the URDF joint origins.
+ANGLE_OFFSET = np.array([
     0.0,
     DH_HALF_PI,
     0.0,
@@ -104,8 +104,8 @@ JOINT_LIMITS = np.array([
 ])
 
 
-def pdf_dh_transform(alpha_i, a_i, d_i, theta_i):
-    """Return one transform using the modified-DH convention in the PDF."""
+def dh_transform(alpha_i, a_i, d_i, theta_i):
+    """Return one transform using the modified-DH convention."""
     c, s = np.cos(theta_i), np.sin(theta_i)
     ca, sa = np.cos(alpha_i), np.sin(alpha_i)
     return np.array([
@@ -116,10 +116,10 @@ def pdf_dh_transform(alpha_i, a_i, d_i, theta_i):
     ], dtype=float)
 
 
-def pdf_fk_from_theta(theta):
-    """Compute the PDF-frame transforms for its six modified-DH joints."""
+def fk_from_theta(theta):
+    """Compute transforms for the six modified-DH joints."""
     transforms = [
-        pdf_dh_transform(alpha_i, a_i, d_i, theta_i)
+        dh_transform(alpha_i, a_i, d_i, theta_i)
         for alpha_i, a_i, d_i, theta_i in zip(DH_ALPHA, DH_A, DH_D, theta)
     ]
     A01, A12, A23, A34, A45, A56 = transforms
@@ -181,7 +181,7 @@ def normalize_joint_angles_to_limits(q):
 
 
 def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
-    """Apply the PDF's analytic IK in its DH frames, then map angles to URDF joints."""
+    """Apply the analytic IK in the DH frames, then map angles to URDF joints."""
     target = np.asarray(A06, dtype=float)
     if target.shape != (4, 4):
         raise ValueError("Expected a 4x4 target transform.")
@@ -218,11 +218,11 @@ def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
     ) / s5
     theta6 = np.arctan2(y6, x6)
 
-    A01 = pdf_dh_transform(DH_ALPHA[0], DH_A[0], DH_D[0], theta1)
-    A12 = pdf_dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], 0.0)
-    A23 = pdf_dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], 0.0)
-    A45 = pdf_dh_transform(DH_ALPHA[4], DH_A[4], DH_D[4], theta5)
-    A56 = pdf_dh_transform(DH_ALPHA[5], DH_A[5], DH_D[5], theta6)
+    A01 = dh_transform(DH_ALPHA[0], DH_A[0], DH_D[0], theta1)
+    A12 = dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], 0.0)
+    A23 = dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], 0.0)
+    A45 = dh_transform(DH_ALPHA[4], DH_A[4], DH_D[4], theta5)
+    A56 = dh_transform(DH_ALPHA[5], DH_A[5], DH_D[5], theta6)
     A46 = A45 @ A56
 
     A14 = np.linalg.inv(A01) @ target @ np.linalg.inv(A46)
@@ -241,14 +241,14 @@ def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
 
     A03 = (
         A01
-        @ pdf_dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], theta2)
-        @ pdf_dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], theta3)
+        @ dh_transform(DH_ALPHA[1], DH_A[1], DH_D[1], theta2)
+        @ dh_transform(DH_ALPHA[2], DH_A[2], DH_D[2], theta3)
     )
     A34 = np.linalg.inv(A03) @ target @ np.linalg.inv(A46)
     theta4 = np.arctan2(A34[1, 0], A34[0, 0])
 
     theta = np.array([theta1, theta2, theta3, theta4, theta5, theta6])
-    q = theta + PDF_TO_URDF_ANGLE_OFFSET
+    q = theta + ANGLE_OFFSET
     actual = compute_fk_from_joint_angles(q)["A06"]
     position_error, orientation_error = compute_pose_errors(target, actual)
     if (position_error > FK_POSITION_TOLERANCE
