@@ -13,11 +13,11 @@ d6 = 45.6e-3
 r2 = 110.4e-3
 r3 = 96.0e-3
 
-# Desired end-effector pose, expressed as g_base -> joint6_flange.
-A06_target = np.array([[0.0, -1.0, 0.0, 0.169999],
-                       [-1.0, 0.0, 0.0, -0.050000],
-                       [0.0, 0.0, -1.0, 0.220000],
-                       [0.0, 0.0, 0.0, 1.0]])
+# Desired tool-center-point pose, expressed relative to g_base.
+A0_TCP_TARGET = np.array([[0.0, -1.0, 0.0, 0.169999],
+                          [-1.0, 0.0, 0.0, -0.025000],
+                          [0.0, 0.0, -1.0, 0.172590],
+                          [0.0, 0.0, 0.0, 1.0]])
 
 
 def urdf_joint_transform(xyz, rpy, theta):
@@ -75,6 +75,26 @@ def compute_fk_from_joint_angles(q):
         "A56": A56,
         "A06": A06,
     }
+
+
+GRIPPER_BASE_FROM_FLANGE = urdf_joint_transform(
+    [0.0, 0.0, 0.034],
+    [1.579, 0.0, 0.0],
+    0.0,
+)
+# The finger boxes end 15 mm beyond their origins; their midpoint is y=30 mm.
+FINGER_TIP_MIDPOINT_IN_GRIPPER_BASE = np.array([0.0, 0.030, 0.0, 1.0])
+# Keep TCP axes aligned with the flange; only shift its origin to the tip midpoint.
+FLANGE_TO_TCP = np.eye(4)
+FLANGE_TO_TCP[:3, 3] = (
+    GRIPPER_BASE_FROM_FLANGE @ FINGER_TIP_MIDPOINT_IN_GRIPPER_BASE
+)[:3]
+
+
+def compute_tcp_fk_from_joint_angles(q):
+    """Compute g_base -> finger-tip midpoint FK, keeping TCP axes flange-aligned."""
+    flange_fk = compute_fk_from_joint_angles(q)["A06"]
+    return flange_fk @ FLANGE_TO_TCP
 
 
 DH_HALF_PI = 1.5708
@@ -181,14 +201,15 @@ def normalize_joint_angles_to_limits(q):
 
 
 def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
-    """Apply the analytic IK in the DH frames, then map angles to URDF joints."""
-    target = np.asarray(A06, dtype=float)
-    if target.shape != (4, 4):
+    """Solve a base-to-TCP target using the flange-based analytic IK model."""
+    tcp_target = np.asarray(A06, dtype=float)
+    if tcp_target.shape != (4, 4):
         raise ValueError("Expected a 4x4 target transform.")
     if any(branch not in (-1.0, 1.0) for branch in
            (shoulder_branch, elbow_branch, wrist_branch)):
         raise ValueError("IK branch values must each be either -1 or +1.")
 
+    target = tcp_target @ np.linalg.inv(FLANGE_TO_TCP)
     Px, Py = target[:2, 3]
     P05 = target[:3, 3] - d6 * target[:3, 2]
     P05xy = np.hypot(P05[0], P05[1])
@@ -249,8 +270,8 @@ def compute_ik_solution(A06, shoulder_branch, elbow_branch, wrist_branch):
 
     theta = np.array([theta1, theta2, theta3, theta4, theta5, theta6])
     q = theta + ANGLE_OFFSET
-    actual = compute_fk_from_joint_angles(q)["A06"]
-    position_error, orientation_error = compute_pose_errors(target, actual)
+    actual_tcp = compute_tcp_fk_from_joint_angles(q)
+    position_error, orientation_error = compute_pose_errors(tcp_target, actual_tcp)
     if (position_error > FK_POSITION_TOLERANCE
             or orientation_error > FK_ORIENTATION_TOLERANCE):
         raise ValueError(
@@ -267,17 +288,19 @@ def main():
     # Forward kinematics at the MoveIt init_pose (all six arm joints are zero).
     q_home = np.zeros(6, dtype=float)
     fk_home = compute_fk_from_joint_angles(q_home)
+    tcp_fk_home = compute_tcp_fk_from_joint_angles(q_home)
 
-    print("FK g_base -> joint6_flange at init_pose:")
-    print("\nA06_fk =\n", np.round(fk_home['A06'], 6))
+    #print("FK g_base -> joint6_flange at init_pose:")
+    print("\nFlange FK at init_pose =\n", np.round(fk_home['A06'], 6))
+    print("\nTCP FK at init_pose =\n", np.round(tcp_fk_home, 6))
 
-    print("\nTarget pose:", A06_target)
-    print("\nValid IK solutions (within URDF joint limits):")
+    print("\nTarget TCP pose:\n", A0_TCP_TARGET)
+    print("\nIK branch results:")
     solution_count = 0
     for shoulder, elbow, wrist in itertools.product((-1.0, 1.0), repeat=3):
         branches = (shoulder, elbow, wrist)
         try:
-            q = compute_ik_solution(A06_target, *branches)
+            q = compute_ik_solution(A0_TCP_TARGET, *branches)
         except ValueError as error:
             print("Branches {}: unavailable ({})".format(branches, error))
             continue
@@ -287,10 +310,10 @@ def main():
             print("Branches {}: outside URDF joint limits".format(branches))
             continue
 
-        fk_solution = compute_fk_from_joint_angles(q)["A06"]
-        position_error, rotation_error = compute_pose_errors(A06_target, fk_solution)
+        fk_solution = compute_tcp_fk_from_joint_angles(q)
+        position_error, rotation_error = compute_pose_errors(A0_TCP_TARGET, fk_solution)
         solution_count += 1
-        print("\nSolution {} — shoulder {}, elbow {}, wrist {}".format(
+        print("\nValid IK Solution/s {} — shoulder {}, elbow {}, wrist {}".format(
             solution_count,
             "+" if shoulder > 0 else "-",
             "+" if elbow > 0 else "-",
